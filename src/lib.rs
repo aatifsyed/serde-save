@@ -1,5 +1,12 @@
 use std::{error::Error, path::PathBuf};
 
+use serde::{
+    ser::{
+        SerializeMap as _, SerializeStruct as _, SerializeStructVariant as _, SerializeTuple as _,
+        SerializeTupleStruct as _, SerializeTupleVariant as _,
+    },
+    Serialize,
+};
 use valuable::{
     EnumDef, Enumerable, Fields, Listable, Mappable, NamedField, NamedValues, StructDef,
     Structable, Tuplable, TupleDef, Valuable, Value, VariantDef, Visit,
@@ -71,6 +78,131 @@ pub struct Variant {
     pub name: &'static str,
     pub variant_index: u32,
     pub variant: &'static str,
+}
+
+impl Serialize for Save {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Save::Bool(it) => serializer.serialize_bool(*it),
+            Save::I8(it) => serializer.serialize_i8(*it),
+            Save::I16(it) => serializer.serialize_i16(*it),
+            Save::I32(it) => serializer.serialize_i32(*it),
+            Save::I64(it) => serializer.serialize_i64(*it),
+            Save::I128(it) => serializer.serialize_i128(*it),
+            Save::U8(it) => serializer.serialize_u8(*it),
+            Save::U16(it) => serializer.serialize_u16(*it),
+            Save::U32(it) => serializer.serialize_u32(*it),
+            Save::U64(it) => serializer.serialize_u64(*it),
+            Save::U128(it) => serializer.serialize_u128(*it),
+            Save::F32(it) => serializer.serialize_f32(*it),
+            Save::F64(it) => serializer.serialize_f64(*it),
+            Save::Char(it) => serializer.serialize_char(*it),
+            Save::String(it) => serializer.serialize_str(it),
+            Save::ByteArray(it) => serializer.serialize_bytes(it),
+            Save::Option(None) => serializer.serialize_none(),
+            Save::Option(Some(it)) => serializer.serialize_some(it),
+            Save::UnitStruct(it) => serializer.serialize_unit_struct(it),
+            Save::UnitVariant(Variant {
+                name,
+                variant_index,
+                variant,
+            }) => serializer.serialize_unit_variant(name, *variant_index, variant),
+            Save::Unit => serializer.serialize_unit(),
+            Save::NewTypeStruct { name, value } => serializer.serialize_newtype_struct(name, value),
+            Save::NewTypeVariant {
+                variant:
+                    Variant {
+                        name,
+                        variant_index,
+                        variant,
+                    },
+                value,
+            } => serializer.serialize_newtype_variant(name, *variant_index, variant, value),
+            Save::Seq(it) => it.serialize(serializer),
+            Save::Map(it) => {
+                let mut map = serializer.serialize_map(Some(it.len()))?;
+                for (k, v) in it {
+                    map.serialize_entry(k, v)?
+                }
+                map.end()
+            }
+            Save::Tuple(it) => {
+                let mut tup = serializer.serialize_tuple(it.len())?;
+                for it in it {
+                    tup.serialize_element(it)?
+                }
+                tup.end()
+            }
+            Save::TupleStruct { name, values } => {
+                let mut tup = serializer.serialize_tuple_struct(name, values.len())?;
+                for it in values {
+                    tup.serialize_field(it)?
+                }
+                tup.end()
+            }
+            Save::TupleVariant {
+                variant:
+                    Variant {
+                        name,
+                        variant_index,
+                        variant,
+                    },
+                values,
+            } => {
+                let mut var = serializer.serialize_tuple_variant(
+                    name,
+                    *variant_index,
+                    variant,
+                    values.len(),
+                )?;
+                for it in values {
+                    var.serialize_field(it)?
+                }
+                var.end()
+            }
+            Save::Struct {
+                name,
+                fields,
+                skipped_fields,
+            } => {
+                let mut strukt = serializer.serialize_struct(name, fields.len())?;
+                for (k, v) in fields {
+                    strukt.serialize_field(k, v)?
+                }
+                for it in skipped_fields {
+                    strukt.skip_field(it)?
+                }
+                strukt.end()
+            }
+            Save::StructVariant {
+                variant:
+                    Variant {
+                        name,
+                        variant_index,
+                        variant,
+                    },
+                fields,
+                skipped_fields,
+            } => {
+                let mut var = serializer.serialize_struct_variant(
+                    name,
+                    *variant_index,
+                    variant,
+                    fields.len(),
+                )?;
+                for (k, v) in fields {
+                    var.serialize_field(k, v)?
+                }
+                for it in skipped_fields {
+                    var.skip_field(it)?
+                }
+                var.end()
+            }
+        }
+    }
 }
 
 pub enum OwnedValue {
