@@ -1,4 +1,4 @@
-use std::{error::Error, path::PathBuf};
+use std::{convert::Infallible, error::Error, path::PathBuf};
 
 use serde::{
     ser::{
@@ -15,7 +15,7 @@ use valuable::{
 pub mod ser;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum Save {
+pub enum Save<E = Infallible> {
     Bool(bool),
     I8(i8),
     I16(i16),
@@ -71,6 +71,8 @@ pub enum Save {
         fields: Vec<(&'static str, Self)>,
         skipped_fields: Vec<&'static str>,
     },
+
+    Error(E),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -201,6 +203,7 @@ impl Serialize for Save {
                 }
                 var.end()
             }
+            Save::Error(e) => match *e {},
         }
     }
 }
@@ -647,6 +650,7 @@ impl From<Save> for OwnedValue {
                     values: fields.into_iter().map(|(_, it)| it.into()).collect(),
                 }))
             }
+            Save::Error(e) => match e {},
         }
     }
 }
