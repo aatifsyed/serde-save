@@ -320,7 +320,7 @@ where
 }
 
 mod imp {
-    use std::cmp;
+    use std::{cmp, collections::BTreeSet};
 
     use super::*;
 
@@ -539,9 +539,54 @@ mod imp {
             }
         }
     }
+
+    fn check<E>(
+        what: &str,
+        config: &Config<E>,
+        expected_len: usize,
+        fields: &mut Vec<(&'static str, Save<E::SaveError>)>,
+        skipped_fields: &[&'static str],
+    ) -> Result<(), Error>
+    where
+        E: ErrorDiscipline,
+    {
+        if config.protocol_errors {
+            let mut seen = BTreeSet::new();
+            let mut dups = Vec::new();
+            for name in fields.iter().map(|(it, _)| it).chain(skipped_fields) {
+                let new = seen.insert(*name);
+                if !new {
+                    dups.push(*name)
+                }
+            }
+            if !dups.is_empty() {
+                let e = Error {
+                    msg: format!(
+                        "protocol error: {} has duplicate field names: {}",
+                        what,
+                        dups.join(", ")
+                    ),
+                    protocol: true,
+                };
+                fields.push(("!error", E::handle(Err(e))?))
+            }
+
+            let actual = fields.len();
+            if expected_len != actual {
+                let e = Error {
+                    msg: format!(
+                        "protcol error: expected a {} of length {}, got {}",
+                        what, expected_len, actual
+                    ),
+                    protocol: true,
+                };
+                fields.push(("!error", E::handle(Err(e))?))
+            }
+        }
+        Ok(())
+    }
+
     pub struct SerializeStruct<E: ErrorDiscipline> {
-        // TODO(aatifsyed): handle mismatch and field name duplications
-        #[allow(unused)]
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
         pub(super) name: &'static str,
@@ -567,7 +612,14 @@ mod imp {
             ));
             Ok(())
         }
-        fn end(self) -> Result<Self::Ok, Self::Error> {
+        fn end(mut self) -> Result<Self::Ok, Self::Error> {
+            check(
+                "struct",
+                &self.config,
+                self.expected_len,
+                &mut self.fields,
+                &self.skipped_fields,
+            )?;
             Ok(Save::Struct {
                 name: self.name,
                 fields: self.fields,
@@ -580,8 +632,6 @@ mod imp {
         }
     }
     pub struct SerializeStructVariant<E: ErrorDiscipline> {
-        // TODO(aatifsyed): handle mismatch and field name duplications
-        #[allow(unused)]
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
         pub(super) variant: Variant,
@@ -607,7 +657,15 @@ mod imp {
             ));
             Ok(())
         }
-        fn end(self) -> Result<Self::Ok, Self::Error> {
+        fn end(mut self) -> Result<Self::Ok, Self::Error> {
+            check(
+                "struct",
+                &self.config,
+                self.expected_len,
+                &mut self.fields,
+                &self.skipped_fields,
+            )?;
+
             Ok(Save::StructVariant {
                 variant: self.variant,
                 fields: self.fields,
