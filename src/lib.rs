@@ -1,9 +1,10 @@
+use core::fmt;
 use std::{convert::Infallible, error::Error, path::PathBuf};
 
 use serde::{
     ser::{
-        SerializeMap as _, SerializeStruct as _, SerializeStructVariant as _, SerializeTuple as _,
-        SerializeTupleStruct as _, SerializeTupleVariant as _,
+        Error as _, SerializeMap as _, SerializeStruct as _, SerializeStructVariant as _,
+        SerializeTuple as _, SerializeTupleStruct as _, SerializeTupleVariant as _,
     },
     Serialize,
 };
@@ -82,7 +83,10 @@ pub struct Variant {
     pub variant: &'static str,
 }
 
-impl Serialize for Save {
+impl<E> Serialize for Save<E>
+where
+    E: fmt::Display,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -203,9 +207,18 @@ impl Serialize for Save {
                 }
                 var.end()
             }
-            Save::Error(e) => match *e {},
+            Save::Error(e) => Err(S::Error::custom(e)),
         }
     }
+}
+
+pub fn save<T: Serialize>(t: T) -> Result<Save, ser::Error> {
+    t.serialize(ser::Serializer::new())
+}
+
+pub fn save_errors<T: Serialize>(t: T) -> Save<ser::Error> {
+    t.serialize(ser::Serializer::new().save_errors())
+        .unwrap_or_else(Save::Error)
 }
 
 pub enum OwnedValue {
@@ -272,8 +285,11 @@ impl Valuable for OwnedValue {
     }
 }
 
-impl From<Save> for OwnedValue {
-    fn from(value: Save) -> Self {
+impl<E> From<Save<E>> for OwnedValue
+where
+    E: Error + Send + Sync + 'static,
+{
+    fn from(value: Save<E>) -> Self {
         match value {
             Save::Bool(it) => Self::Bool(it),
             Save::I8(it) => Self::I8(it),
@@ -650,13 +666,13 @@ impl From<Save> for OwnedValue {
                     values: fields.into_iter().map(|(_, it)| it.into()).collect(),
                 }))
             }
-            Save::Error(e) => match e {},
+            Save::Error(e) => Self::Error(Box::new(e)),
         }
     }
 }
 
-fn collect_fields(
-    fields: &[(&'static str, Save)],
+fn collect_fields<E>(
+    fields: &[(&'static str, Save<E>)],
     skipped_fields: &[&'static str],
 ) -> Box<[valuable::NamedField<'static>]> {
     let fields = fields

@@ -1,5 +1,6 @@
 use crate::{Save, Variant};
 use core::{fmt, iter};
+use std::{convert::Infallible, marker::PhantomData};
 
 #[derive(Debug)]
 pub struct Error {
@@ -22,14 +23,93 @@ impl serde::ser::Error for Error {
 
 impl std::error::Error for Error {}
 
-pub struct Serializer {
-    config: Config,
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::ShortCircuit {}
+    impl Sealed for super::Persist {}
 }
 
-#[derive(Copy, Clone)]
-struct Config {
-    is_human_readable: bool,
+pub trait ErrorDiscipline: sealed::Sealed {
+    type SaveError;
+    fn handle(res: Result<Save<Self::SaveError>, Error>) -> Result<Save<Self::SaveError>, Error>;
 }
+
+pub enum ShortCircuit {}
+pub enum Persist {}
+
+impl ErrorDiscipline for ShortCircuit {
+    type SaveError = Infallible;
+    fn handle(res: Result<Save<Self::SaveError>, Error>) -> Result<Save<Self::SaveError>, Error> {
+        res
+    }
+}
+
+impl ErrorDiscipline for Persist {
+    type SaveError = Error;
+    fn handle(res: Result<Save<Self::SaveError>, Error>) -> Result<Save<Self::SaveError>, Error> {
+        Ok(res.unwrap_or_else(Save::Error))
+    }
+}
+
+pub struct Serializer<ErrorDiscipline = ShortCircuit> {
+    config: Config<ErrorDiscipline>,
+}
+
+impl Serializer<ShortCircuit> {
+    pub fn new() -> Self {
+        Self {
+            config: Config {
+                is_human_readable: false,
+                _error_discipline: PhantomData,
+            },
+        }
+    }
+}
+
+impl<E> Serializer<E> {
+    pub fn human_readable(mut self, is_human_readable: bool) -> Self {
+        self.config.is_human_readable = is_human_readable;
+        self
+    }
+    pub fn save_errors(self) -> Serializer<Persist> {
+        let Self {
+            config:
+                Config {
+                    is_human_readable,
+                    _error_discipline,
+                },
+        } = self;
+        Serializer {
+            config: Config {
+                is_human_readable,
+                _error_discipline: PhantomData,
+            },
+        }
+    }
+}
+
+impl Default for Serializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct Config<E = ShortCircuit> {
+    is_human_readable: bool,
+    // TODO(aatifsyed): handle
+    // - jagged key/value pairs in a map
+    // - incorrect sequence/tuple lengths
+    // - duplicate field names
+    // protocol_errors: bool,
+    _error_discipline: PhantomData<fn() -> E>,
+}
+
+impl<E> Clone for Config<E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<E> Copy for Config<E> {}
 
 macro_rules! simple {
     ($($method:ident($ty:ty) -> $variant:ident);* $(;)?) => {
@@ -41,16 +121,19 @@ macro_rules! simple {
     };
 }
 
-impl serde::Serializer for Serializer {
-    type Ok = Save;
+impl<E> serde::Serializer for Serializer<E>
+where
+    E: ErrorDiscipline,
+{
+    type Ok = Save<E::SaveError>;
     type Error = Error;
-    type SerializeSeq = imp::SerializeSeq;
-    type SerializeTuple = imp::SerializeTuple;
-    type SerializeTupleStruct = imp::SerializeTupleStruct;
-    type SerializeTupleVariant = imp::SerializeTupleVariant;
-    type SerializeMap = imp::SerializeMap;
-    type SerializeStruct = imp::SerializeStruct;
-    type SerializeStructVariant = imp::SerializeStructVariant;
+    type SerializeSeq = imp::SerializeSeq<E>;
+    type SerializeTuple = imp::SerializeTuple<E>;
+    type SerializeTupleStruct = imp::SerializeTupleStruct<E>;
+    type SerializeTupleVariant = imp::SerializeTupleVariant<E>;
+    type SerializeMap = imp::SerializeMap<E>;
+    type SerializeStruct = imp::SerializeStruct<E>;
+    type SerializeStructVariant = imp::SerializeStructVariant<E>;
 
     fn is_human_readable(&self) -> bool {
         self.config.is_human_readable
@@ -87,7 +170,9 @@ impl serde::Serializer for Serializer {
         self,
         value: &T,
     ) -> Result<Self::Ok, Self::Error> {
-        Ok(Save::Option(Some(Box::new(value.serialize(self)?))))
+        Ok(Save::Option(Some(Box::new(E::handle(
+            value.serialize(self),
+        )?))))
     }
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
         Ok(Save::Unit)
@@ -114,7 +199,7 @@ impl serde::Serializer for Serializer {
     ) -> Result<Self::Ok, Self::Error> {
         Ok(Save::NewTypeStruct {
             name,
-            value: Box::new(value.serialize(self)?),
+            value: Box::new(E::handle(value.serialize(self))?),
         })
     }
     fn serialize_newtype_variant<T: ?Sized + serde::Serialize>(
@@ -130,7 +215,7 @@ impl serde::Serializer for Serializer {
                 variant_index,
                 variant,
             },
-            value: Box::new(value.serialize(self)?),
+            value: Box::new(E::handle(value.serialize(self))?),
         })
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
@@ -219,61 +304,70 @@ mod imp {
 
     use super::*;
 
-    pub struct SerializeSeq {
-        pub(super) config: Config,
-        pub(super) inner: Vec<Save>,
+    pub struct SerializeSeq<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
+        pub(super) inner: Vec<Save<E::SaveError>>,
     }
-    impl serde::ser::SerializeSeq for SerializeSeq {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeSeq for SerializeSeq<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_element<T: ?Sized + serde::Serialize>(
             &mut self,
             value: &T,
         ) -> Result<(), Self::Error> {
-            self.inner.push(value.serialize(Serializer {
+            self.inner.push(E::handle(value.serialize(Serializer {
                 config: self.config,
-            })?);
+            }))?);
             Ok(())
         }
         fn end(self) -> Result<Self::Ok, Self::Error> {
             Ok(Save::Seq(self.inner))
         }
     }
-    pub struct SerializeTuple {
-        pub(super) config: Config,
-        pub(super) inner: Vec<Save>,
+    pub struct SerializeTuple<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
+        pub(super) inner: Vec<Save<E::SaveError>>,
     }
-    impl serde::ser::SerializeTuple for SerializeTuple {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeTuple for SerializeTuple<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_element<T: ?Sized + serde::Serialize>(
             &mut self,
             value: &T,
         ) -> Result<(), Self::Error> {
-            self.inner.push(value.serialize(Serializer {
+            self.inner.push(E::handle(value.serialize(Serializer {
                 config: self.config,
-            })?);
+            }))?);
             Ok(())
         }
         fn end(self) -> Result<Self::Ok, Self::Error> {
             Ok(Save::Tuple(self.inner))
         }
     }
-    pub struct SerializeTupleStruct {
-        pub(super) config: Config,
+    pub struct SerializeTupleStruct<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
         pub(super) name: &'static str,
-        pub(super) values: Vec<Save>,
+        pub(super) values: Vec<Save<E::SaveError>>,
     }
-    impl serde::ser::SerializeTupleStruct for SerializeTupleStruct {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeTupleStruct for SerializeTupleStruct<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
             value: &T,
         ) -> Result<(), Self::Error> {
-            self.values.push(value.serialize(Serializer {
+            self.values.push(E::handle(value.serialize(Serializer {
                 config: self.config,
-            })?);
+            }))?);
             Ok(())
         }
 
@@ -284,21 +378,24 @@ mod imp {
             })
         }
     }
-    pub struct SerializeTupleVariant {
-        pub(super) config: Config,
+    pub struct SerializeTupleVariant<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
         pub(super) variant: Variant,
-        pub(super) values: Vec<Save>,
+        pub(super) values: Vec<Save<E::SaveError>>,
     }
-    impl serde::ser::SerializeTupleVariant for SerializeTupleVariant {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeTupleVariant for SerializeTupleVariant<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
             value: &T,
         ) -> Result<(), Self::Error> {
-            self.values.push(value.serialize(Serializer {
+            self.values.push(E::handle(value.serialize(Serializer {
                 config: self.config,
-            })?);
+            }))?);
             Ok(())
         }
         fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -308,30 +405,33 @@ mod imp {
             })
         }
     }
-    pub struct SerializeMap {
-        pub(super) config: Config,
-        pub(super) keys: Vec<Save>,
-        pub(super) values: Vec<Save>,
+    pub struct SerializeMap<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
+        pub(super) keys: Vec<Save<E::SaveError>>,
+        pub(super) values: Vec<Save<E::SaveError>>,
     }
-    impl serde::ser::SerializeMap for SerializeMap {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeMap for SerializeMap<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_key<T: ?Sized + serde::Serialize>(
             &mut self,
             key: &T,
         ) -> Result<(), Self::Error> {
-            self.keys.push(key.serialize(Serializer {
+            self.keys.push(E::handle(key.serialize(Serializer {
                 config: self.config,
-            })?);
+            }))?);
             Ok(())
         }
         fn serialize_value<T: ?Sized + serde::Serialize>(
             &mut self,
             value: &T,
         ) -> Result<(), Self::Error> {
-            self.values.push(value.serialize(Serializer {
+            self.values.push(E::handle(value.serialize(Serializer {
                 config: self.config,
-            })?);
+            }))?);
             Ok(())
         }
         fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -342,23 +442,18 @@ mod imp {
                 )),
             }
         }
-        fn serialize_entry<K, V>(&mut self, key: &K, value: &V) -> Result<(), Self::Error>
-        where
-            K: ?Sized + serde::Serialize,
-            V: ?Sized + serde::Serialize,
-        {
-            self.serialize_key(key)?;
-            self.serialize_value(value)
-        }
     }
-    pub struct SerializeStruct {
-        pub(super) config: Config,
+    pub struct SerializeStruct<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
         pub(super) name: &'static str,
-        pub(super) fields: Vec<(&'static str, Save)>,
+        pub(super) fields: Vec<(&'static str, Save<E::SaveError>)>,
         pub(super) skipped_fields: Vec<&'static str>,
     }
-    impl serde::ser::SerializeStruct for SerializeStruct {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeStruct for SerializeStruct<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -367,9 +462,9 @@ mod imp {
         ) -> Result<(), Self::Error> {
             self.fields.push((
                 key,
-                value.serialize(Serializer {
+                E::handle(value.serialize(Serializer {
                     config: self.config,
-                })?,
+                }))?,
             ));
             Ok(())
         }
@@ -385,14 +480,17 @@ mod imp {
             Ok(())
         }
     }
-    pub struct SerializeStructVariant {
-        pub(super) config: Config,
+    pub struct SerializeStructVariant<E: ErrorDiscipline> {
+        pub(super) config: Config<E>,
         pub(super) variant: Variant,
-        pub(super) fields: Vec<(&'static str, Save)>,
+        pub(super) fields: Vec<(&'static str, Save<E::SaveError>)>,
         pub(super) skipped_fields: Vec<&'static str>,
     }
-    impl serde::ser::SerializeStructVariant for SerializeStructVariant {
-        type Ok = Save;
+    impl<E> serde::ser::SerializeStructVariant for SerializeStructVariant<E>
+    where
+        E: ErrorDiscipline,
+    {
+        type Ok = Save<E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -401,9 +499,9 @@ mod imp {
         ) -> Result<(), Self::Error> {
             self.fields.push((
                 key,
-                value.serialize(Serializer {
+                E::handle(value.serialize(Serializer {
                     config: self.config,
-                })?,
+                }))?,
             ));
             Ok(())
         }
