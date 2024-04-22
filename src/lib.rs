@@ -4,15 +4,22 @@
 //! including [struct names](Save::Struct::name), [field names](Save::Struct::fields),
 //! and [enum variant information](Variant).
 //!
-//! [`Save`] can optionally persist errors _in the serialization tree_ instead of short-circuiting.
+//! [`Save`] can optionally [persist errors](save_errors) _in the serialization tree_,
+//! instead of short-circuiting.
 //!
-//!
-//!
+//! By default, [save_errors] and [`save`] also check for incorrect implementations
+//! of the serde protocol.
+//! See the documentation on [`Save`]s variants to see which invariants are checked.
+//! You can [disable this behaviour](Serializer::check_for_protocol_errors) if you
+//! wish.
+
+mod imp;
+
+pub use imp::Serializer;
 
 use core::{convert::Infallible, fmt};
 use core::{iter, marker::PhantomData};
 
-use ser::Error;
 use serde::{
     ser::{
         Error as _, SerializeMap as _, SerializeStruct as _, SerializeStructVariant as _,
@@ -20,8 +27,6 @@ use serde::{
     },
     Deserialize, Serialize,
 };
-
-pub mod ser;
 
 /// A complete [`serde`] serialization tree.
 ///
@@ -85,12 +90,9 @@ pub enum Save<'a, E = Infallible> {
     /// A tuple struct with a single unnamed field, from a call to [`serde::Serializer::serialize_newtype_struct`].
     /// ```
     /// # struct A;
-    /// struct MyStruct(A)
+    /// struct MyStruct(A);
     /// ```
-    NewTypeStruct {
-        name: &'a str,
-        value: Box<Self>,
-    },
+    NewTypeStruct { name: &'a str, value: Box<Self> },
     /// A tuple variant of an enum with a single unnamed field, from a call to [`serde::Serializer::serialize_newtype_variant`].
     /// ```
     /// # struct A;
@@ -109,7 +111,7 @@ pub enum Save<'a, E = Infallible> {
     /// If [protocol errors] are enabled, checks that the number of items matches
     /// the length (if any) passed to the call to `serialize_seq`.
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
+    /// [protocol errors]: Serializer::check_for_protocol_errors
     Seq(Vec<Self>),
     /// A dynamic mapping between values, from a call to [`serde::Serializer::serialize_map`].
     ///
@@ -117,19 +119,19 @@ pub enum Save<'a, E = Infallible> {
     /// - the number of items matches the length (if any) passed to the call to `serialize_map`.
     /// - there are no orphaned keys or values.
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
+    /// [protocol errors]: Serializer::check_for_protocol_errors
     Map(Vec<(Self, Self)>),
 
     /// A fixed sequence of values, from a call to [`serde::Serializer::serialize_tuple`].
     ///
     /// ```
     /// # struct A; struct B; struct C;
-    /// (A, B, C)
+    /// (A, B, C);
     /// ```
     ///
     /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
+    /// [protocol errors]: Serializer::check_for_protocol_errors
     Tuple(Vec<Self>),
     /// A fixed sequence of unnamed fields in a struct, from a call to [`serde::Serializer::serialize_tuple_struct`].
     ///
@@ -140,11 +142,8 @@ pub enum Save<'a, E = Infallible> {
     ///
     /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
-    TupleStruct {
-        name: &'a str,
-        values: Vec<Self>,
-    },
+    /// [protocol errors]: Serializer::check_for_protocol_errors
+    TupleStruct { name: &'a str, values: Vec<Self> },
     /// A fixed sequence of unnamed fields in an enum variant, from a call to [`serde::Serializer::serialize_tuple_variant`].
     /// ```
     /// # struct A; struct B; struct C;
@@ -155,7 +154,7 @@ pub enum Save<'a, E = Infallible> {
     /// ```
     /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
+    /// [protocol errors]: Serializer::check_for_protocol_errors
     TupleVariant {
         variant: Variant<'a>,
         values: Vec<Self>,
@@ -172,7 +171,7 @@ pub enum Save<'a, E = Infallible> {
     /// - the number of items matches the length passed to the call.
     /// - all fields are unique
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
+    /// [protocol errors]: Serializer::check_for_protocol_errors
     Struct {
         name: &'a str,
         /// RHS is [`None`] for [skip](`serde::ser::SerializeStruct::skip_field`)ed fields.
@@ -194,7 +193,7 @@ pub enum Save<'a, E = Infallible> {
     /// - the number of items matches the length passed to the call.
     /// - all fields are unique
     ///
-    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
+    /// [protocol errors]: Serializer::check_for_protocol_errors
     StructVariant {
         variant: Variant<'a>,
         /// RHS is [`None`] for [skip](`serde::ser::SerializeStructVariant::skip_field`)ed fields.
@@ -203,10 +202,44 @@ pub enum Save<'a, E = Infallible> {
         fields: Vec<(&'a str, Option<Self>)>,
     },
 
+    /// An in-tree persisted error.
+    ///
+    /// Note that this is _uninhabited_ by default, and you can prove it to be
+    /// unreachable in your code:
+    ///
+    /// ```no_run
+    /// # use serde_save::Save;
+    ///
+    /// fn stringify(save: Save) -> String {
+    ///     match save {
+    ///         // the compiler knows this branch won't be hit, so coerced the
+    ///         // empty match to String
+    ///         Save::Error(e) => match e {},
+    ///         // ...
+    ///         # _ => todo!(),
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// However, if [errors are persisted](save_errors), you can inspect them
+    /// ```no_run
+    /// # use serde_save::{Save, Error};
+    /// let save: Save<Error>;
+    /// # let save: Save<Error> = todo!();
+    /// match save {
+    ///     Save::Error(e) => {
+    ///         println!("{}", e);
+    ///         if e.is_protocol() { /* .. */ }
+    ///     }
+    ///     // ...
+    ///     # _ => todo!(),
+    /// }
+    /// ```
     Error(E),
 }
 
 impl<'a> Save<'a, Error> {
+    /// Convenience method.
     pub fn error(msg: impl fmt::Display) -> Self {
         Self::Error(Error::custom(msg))
     }
@@ -216,16 +249,59 @@ impl<'a> Save<'a, Error> {
 /// - Any node's call to [`serde::Serialize::serialize`] fails.
 /// - Any node has any [protocol errors].
 ///
-/// [protocol errors]: ser::Serializer::check_for_protocol_errors
-pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, ser::Error> {
-    t.serialize(ser::Serializer::new())
+///
+/// [protocol errors]: Serializer::check_for_protocol_errors
+pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, Error> {
+    t.serialize(Serializer::new())
 }
 
+/// Save the serialization tree, annotating it with [`Save::Error`] if:
+/// - Any node's call to [`serde::Serialize::serialize`] fails.
+/// - Any node has any [protocol errors].
+///
+/// [protocol errors]: Serializer::check_for_protocol_errors
 #[must_use]
-pub fn save_errors<T: Serialize>(t: T) -> Save<'static, ser::Error> {
-    t.serialize(ser::Serializer::new().save_errors())
+pub fn save_errors<T: Serialize>(t: T) -> Save<'static, Error> {
+    t.serialize(Serializer::new().save_errors())
         .unwrap_or_else(Save::Error)
 }
+
+/// An error returned by an implementation of [`serde::Serialize::serialize`], or
+/// [protocol error] checking.
+///
+/// [protocol error]: Serializer::check_for_protocol_errors
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub struct Error {
+    msg: String,
+    protocol: bool,
+}
+
+impl Error {
+    /// Returns `true` if these error was caused by an incorrect implementation
+    /// of the [`serde`] methods.
+    ///
+    /// See documentation on [`Save`]'s variants for the invariants that are checked.
+    pub fn is_protocol(&self) -> bool {
+        self.protocol
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl serde::ser::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Self {
+            msg: msg.to_string(),
+            protocol: false,
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Information about a serialized `enum` variant.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
