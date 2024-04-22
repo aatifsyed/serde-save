@@ -3,11 +3,64 @@
 //! [`Save`] represents the entire [serde data model](https://serde.rs/data-model.html),
 //! including [struct names](Save::Struct::name), [field names](Save::Struct::fields),
 //! and [enum variant information](Variant).
+//! This means that it can intercept structures when they are serialized, before
+//! losslessly forwarding them.
 //!
 //! [`Save`] can optionally [persist errors](save_errors) _in the serialization tree_,
 //! instead of short-circuiting.
+//! This is a zero-cost option - see documentation on [`Save::Error`] for more.
+//! ```
+//! # use std::time::{Duration, SystemTime};
+//! # use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
+//! # use serde::Serialize;
+//! # use serde_save::{Save, save, save_errors};
+//! #[derive(Serialize)]
+//! struct MyStruct {
+//!     system_time: SystemTime,
+//!     path_buf: PathBuf,
+//!     normal_string: String,
+//! }
 //!
-//! By default, [save_errors] and [`save`] also check for incorrect implementations
+//! // These will fail to serialize
+//! let before_unix_epoch = SystemTime::UNIX_EPOCH - Duration::from_secs(1);
+//! let non_utf8_path = PathBuf::from(OsString::from_vec([u8::MAX].into()));
+//!
+//! let my_struct = MyStruct {
+//!     system_time: before_unix_epoch,
+//!     path_buf: non_utf8_path,
+//!     normal_string: String::from("this is a string"), // this is fine
+//! };
+//!
+//! // By default errors are short-circuiting
+//! assert_eq!(
+//!     save(&my_struct).unwrap_err().to_string(),
+//!     "SystemTime must be later than UNIX_EPOCH"
+//! );
+//!
+//! // But you can persist and inspect them in-tree if you prefer.
+//! assert_eq!(
+//!     save_errors(&my_struct),
+//!     Save::Struct {
+//!         name: "MyStruct",
+//!         fields: vec![
+//!             (
+//!                 "system_time",
+//!                 Some(Save::error("SystemTime must be later than UNIX_EPOCH"))
+//!             ),
+//!             (
+//!                 "path_buf",
+//!                 Some(Save::error("path contains invalid UTF-8 characters"))
+//!             ),
+//!             (
+//!                 "normal_string",
+//!                 Some(Save::String(String::from("this is a string")))
+//!             )
+//!         ]
+//!     }
+//! )
+//! ```
+//!
+//! By default, [`save_errors`] and [`save`] also check for incorrect implementations
 //! of the serde protocol.
 //! See the documentation on [`Save`]s variants to see which invariants are checked.
 //! You can [disable this behaviour](Serializer::check_for_protocol_errors) if you
@@ -314,6 +367,132 @@ pub struct Variant<'a> {
     pub variant: &'a str,
 }
 
+macro_rules! from {
+    ($($variant:ident($ty:ty)),* $(,)?) => {
+        $(
+            impl<'a, E> From<$ty> for Save<'a, E> {
+                fn from(it: $ty) -> Self {
+                    Self::$variant(it)
+                }
+            }
+        )*
+    };
+}
+
+from! {
+    Bool(bool),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    I128(i128),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    U128(u128),
+    F32(f32),
+    F64(f64),
+    Char(char),
+    String(String),
+    ByteArray(Vec<u8>),
+    UnitVariant(Variant<'a>),
+}
+
+impl<'a, E> From<()> for Save<'a, E> {
+    fn from(_: ()) -> Self {
+        Self::Unit
+    }
+}
+impl<'a, E, T> From<Option<T>> for Save<'a, E>
+where
+    T: Into<Save<'a, E>>,
+{
+    fn from(it: Option<T>) -> Self {
+        Self::Option(it.map(Into::into).map(Box::new))
+    }
+}
+
+impl<'a, E, T> FromIterator<T> for Save<'a, E>
+where
+    T: Into<Save<'a, E>>,
+{
+    fn from_iter<II: IntoIterator<Item = T>>(iter: II) -> Self {
+        Self::Seq(iter.into_iter().map(Into::into).collect())
+    }
+}
+
+impl<'a, E, K, V> FromIterator<(K, V)> for Save<'a, E>
+where
+    K: Into<Save<'a, E>>,
+    V: Into<Save<'a, E>>,
+{
+    fn from_iter<II: IntoIterator<Item = (K, V)>>(iter: II) -> Self {
+        Self::Map(
+            iter.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
+    }
+}
+
+macro_rules! from_tuple {
+    ($($ident:ident),* $(,)?) => {
+        #[allow(non_snake_case)]
+        impl<'a, E, $($ident),*> From<($($ident,)*)> for Save<'a, E>
+        where
+            $($ident: Into<Save<'a, E>>,)*
+        {
+            fn from(($($ident,)*): ($($ident,)*)) -> Self {
+                Self::Tuple([
+                    $($ident.into()),*
+                ].into())
+            }
+        }
+    };
+}
+
+from_tuple!(T0);
+// from_tuple!(T0, T1); // conflicting
+from_tuple!(T0, T1, T2);
+from_tuple!(T0, T1, T2, T3);
+from_tuple!(T0, T1, T2, T3, T4);
+from_tuple!(T0, T1, T2, T3, T4, T5);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17);
+from_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18);
+from_tuple!(
+    T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
+);
+from_tuple!(
+    T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20
+);
+from_tuple!(
+    T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20,
+    T21
+);
+from_tuple!(
+    T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20,
+    T21, T22
+);
+from_tuple!(
+    T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20,
+    T21, T22, T23
+);
+
+/// If [`protocol errors`](Serializer::check_for_protocol_errors) are disabled,
+/// this will perfectly preserve the underlying structure of the originally
+/// saved item.
 impl<E> Serialize for Save<'static, E>
 where
     E: fmt::Display,
@@ -438,6 +617,7 @@ where
     }
 }
 
+/// This is a best-effort deserialization, provided for completeness.
 impl<'a, 'de> Deserialize<'de> for Save<'a> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
