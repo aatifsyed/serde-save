@@ -1,4 +1,15 @@
 //! The most complete serialization tree for [`serde`].
+//!
+//! [`Save`] represents the entire [serde data model](https://serde.rs/data-model.html),
+//! including [struct names](Save::Struct::name), [field names](Save::Struct::fields),
+//! and [enum variant information](Variant).
+//!
+//! This is useful for interacting with other crates like [`valuable`].
+//!
+//!
+//! # Handling Errors
+//!
+//! ## Protocol errors
 
 use core::{convert::Infallible, fmt};
 use std::iter;
@@ -13,58 +24,174 @@ use serde::{
 
 pub mod ser;
 
+/// A complete [`serde`] serialization tree.
+///
+/// See [`crate documentation`](mod@self) for more.
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Save<E = Infallible> {
+    /// Primitive type, from a call to [`serde::Serializer::serialize_bool`].
     Bool(bool),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_i8`].
     I8(i8),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_i16`].
     I16(i16),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_i32`].
     I32(i32),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_i64`].
     I64(i64),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_i128`].
     I128(i128),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_u8`].
     U8(u8),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_u16`].
     U16(u16),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_u32`].
     U32(u32),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_u64`].
     U64(u64),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_u128`].
     U128(u128),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_f32`].
     F32(f32),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_f64`].
     F64(f64),
+    /// Primitive type, from a call to [`serde::Serializer::serialize_char`].
     Char(char),
 
+    /// A call to [`serde::Serializer::serialize_str`].
     String(String),
+    /// A call to [`serde::Serializer::serialize_bytes`].
     ByteArray(Vec<u8>),
+    /// A call to [`serde::Serializer::serialize_some`] or [`serde::Serializer::serialize_none`].
     Option(Option<Box<Self>>),
 
+    /// The empty tuple, from a call to [`serde::Serializer::serialize_unit`].
     Unit,
+    /// A unit struct, from a call to [`serde::Serializer::serialize_unit_struct`].
+    /// ```
+    /// struct MyUnitStruct;
+    /// ```
     UnitStruct(&'static str),
+    /// A unit variant of an enum, from a call to [`serde::Serializer::serialize_unit_variant`].
+    /// ```
+    /// enum MyEnum {
+    ///     MyUnitVariant,
+    ///     // ...
+    /// }
+    /// ```
     UnitVariant(Variant),
 
+    /// A tuple struct with a single unnamed field, from a call to [`serde::Serializer::serialize_newtype_struct`].
+    /// ```
+    /// # struct A;
+    /// struct MyStruct(A)
+    /// ```
     NewTypeStruct {
         name: &'static str,
         value: Box<Self>,
     },
+    /// A tuple variant of an enum with a single unnamed field, from a call to [`serde::Serializer::serialize_newtype_variant`].
+    /// ```
+    /// # struct A;
+    /// enum MyEnum {
+    ///     MyNewTypeVariant(A),
+    ///     // ...
+    /// }
+    /// ```
     NewTypeVariant {
         variant: Variant,
         value: Box<Self>,
     },
 
+    /// A dynamic sequence of values, from a call to [`serde::Serializer::serialize_seq`].
+    ///
+    /// If [protocol errors] are enabled, checks that the number of items matches
+    /// the length (if any) passed to the call to `serialize_seq`.
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     Seq(Vec<Self>),
+    /// A dynamic mapping between values, from a call to [`serde::Serializer::serialize_map`].
+    ///
+    /// If [protocol errors] are enabled, checks that:
+    /// - the number of items matches the length (if any) passed to the call to `serialize_map`.
+    /// - there are no orphaned keys or values.
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     Map(Vec<(Self, Self)>),
 
+    /// A fixed sequence of values, from a call to [`serde::Serializer::serialize_tuple`].
+    ///
+    /// ```
+    /// # struct A; struct B; struct C;
+    /// (A, B, C)
+    /// ```
+    ///
+    /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     Tuple(Vec<Self>),
+    /// A fixed sequence of unnamed fields in a struct, from a call to [`serde::Serializer::serialize_tuple_struct`].
+    ///
+    /// ```
+    /// # struct A; struct B; struct C;
+    /// struct MyTupleStruct(A, B, C);
+    /// ```
+    ///
+    /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     TupleStruct {
         name: &'static str,
         values: Vec<Self>,
     },
+    /// A fixed sequence of unnamed fields in an enum variant, from a call to [`serde::Serializer::serialize_tuple_variant`].
+    /// ```
+    /// # struct A; struct B; struct C;
+    /// enum MyEnum {
+    ///     MyTupleVariant(A, B, C),
+    ///     // ...
+    /// }
+    /// ```
+    /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     TupleVariant {
         variant: Variant,
         values: Vec<Self>,
     },
 
+    /// A fixed mapping from field names to values in a struct, from a call to [`serde::Serializer::serialize_struct`].
+    /// ```
+    /// struct MyStruct {
+    ///     num_yaks: usize,
+    ///     shepherd_name: String,
+    /// }
+    /// ```
+    /// If [protocol errors] are enabled, checks that:
+    /// - the number of items matches the length passed to the call.
+    /// - all fields are unique
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     Struct {
         name: &'static str,
         /// RHS is [`None`] for [skip](`serde::ser::SerializeStruct::skip_field`)ed fields
         fields: Vec<(&'static str, Option<Self>)>,
     },
+    /// A fixed mapping from named fields to values in an enum variant, from a call to [`serde::Serializer::serialize_struct_variant`].
+    /// ```
+    /// enum MyEnum {
+    ///     MyStructVariant {
+    ///         num_yaks: usize,
+    ///         shepherd_name: String,
+    ///     },
+    ///     // ...
+    /// }
+    /// ```
+    /// If [protocol errors] are enabled, checks that:
+    /// - the number of items matches the length passed to the call.
+    /// - all fields are unique
+    ///
+    /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     StructVariant {
         variant: Variant,
         /// RHS is [`None`] for [skip](`serde::ser::SerializeStructVariant::skip_field`)ed fields
@@ -74,6 +201,11 @@ pub enum Save<E = Infallible> {
     Error(E),
 }
 
+/// Save the serialization tree, returning an [`Err`] if:
+/// - Any node's call to [`serde::Serialize::serialize`] fails.
+/// - Any node has any [protocol errors].
+///
+/// [protocol errors]: ser::Serializer::check_for_protocol_errors
 pub fn save<T: Serialize>(t: T) -> Result<Save, ser::Error> {
     t.serialize(ser::Serializer::new())
 }
@@ -83,10 +215,14 @@ pub fn save_errors<T: Serialize>(t: T) -> Save<ser::Error> {
         .unwrap_or_else(Save::Error)
 }
 
+/// Information about a serialized `enum` variant.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Variant {
+    /// The name of the outer `enum`.
     pub name: &'static str,
+    /// The index of this variant within the outer `enum`.
     pub variant_index: u32,
+    /// The name of the inhabited variant within the outer `enum`
     pub variant: &'static str,
 }
 

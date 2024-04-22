@@ -336,7 +336,7 @@ mod imp {
             if expected != actual {
                 let e = Error {
                     msg: format!(
-                        "protcol error: expected a {} of length {}, got {}",
+                        "protocol error: expected a {} of length {}, got {}",
                         what, expected, actual
                     ),
                     protocol: true,
@@ -519,7 +519,7 @@ mod imp {
                             if self.config.protocol_errors && expected != map.len() {
                                 let e = || Error {
                                     msg: format!(
-                                        "protcol error: expected a map of length {}, got {}",
+                                        "protocol error: expected a map of length {}, got {}",
                                         expected,
                                         map.len()
                                     ),
@@ -572,7 +572,7 @@ mod imp {
             if expected_len != actual {
                 let e = Error {
                     msg: format!(
-                        "protcol error: expected a {} of length {}, got {}",
+                        "protocol error: expected a {} of length {}, got {}",
                         what, expected_len, actual
                     ),
                     protocol: true,
