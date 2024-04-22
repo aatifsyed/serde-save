@@ -1,7 +1,7 @@
 use crate::{Save, Variant};
 use core::{convert::Infallible, fmt, marker::PhantomData};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct Error {
     msg: String,
     protocol: bool,
@@ -139,7 +139,7 @@ impl<E> serde::Serializer for Serializer<E>
 where
     E: ErrorDiscipline,
 {
-    type Ok = Save<E::SaveError>;
+    type Ok = Save<'static, E::SaveError>;
     type Error = Error;
     type SerializeSeq = imp::SerializeSeq<E>;
     type SerializeTuple = imp::SerializeTuple<E>;
@@ -326,7 +326,7 @@ mod imp {
         what: &str,
         config: &Config<E>,
         expected: usize,
-        pushing: &mut Vec<Save<E::SaveError>>,
+        pushing: &mut Vec<Save<'static, E::SaveError>>,
     ) -> Result<(), Error>
     where
         E: ErrorDiscipline,
@@ -350,13 +350,13 @@ mod imp {
     pub struct SerializeSeq<E: ErrorDiscipline> {
         pub(super) config: Config<E>,
         pub(super) expected_len: Option<usize>,
-        pub(super) inner: Vec<Save<E::SaveError>>,
+        pub(super) inner: Vec<Save<'static, E::SaveError>>,
     }
     impl<E> serde::ser::SerializeSeq for SerializeSeq<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_element<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -377,13 +377,13 @@ mod imp {
     pub struct SerializeTuple<E: ErrorDiscipline> {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
-        pub(super) inner: Vec<Save<E::SaveError>>,
+        pub(super) inner: Vec<Save<'static, E::SaveError>>,
     }
     impl<E> serde::ser::SerializeTuple for SerializeTuple<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_element<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -403,13 +403,13 @@ mod imp {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
         pub(super) name: &'static str,
-        pub(super) values: Vec<Save<E::SaveError>>,
+        pub(super) values: Vec<Save<'static, E::SaveError>>,
     }
     impl<E> serde::ser::SerializeTupleStruct for SerializeTupleStruct<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -437,14 +437,14 @@ mod imp {
     pub struct SerializeTupleVariant<E: ErrorDiscipline> {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
-        pub(super) variant: Variant,
-        pub(super) values: Vec<Save<E::SaveError>>,
+        pub(super) variant: Variant<'static>,
+        pub(super) values: Vec<Save<'static, E::SaveError>>,
     }
     impl<E> serde::ser::SerializeTupleVariant for SerializeTupleVariant<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -472,14 +472,14 @@ mod imp {
     pub struct SerializeMap<E: ErrorDiscipline> {
         pub(super) expected_len: Option<usize>,
         pub(super) config: Config<E>,
-        pub(super) keys: Vec<Save<E::SaveError>>,
-        pub(super) values: Vec<Save<E::SaveError>>,
+        pub(super) keys: Vec<Save<'static, E::SaveError>>,
+        pub(super) values: Vec<Save<'static, E::SaveError>>,
     }
     impl<E> serde::ser::SerializeMap for SerializeMap<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_key<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -542,7 +542,7 @@ mod imp {
         what: &str,
         config: &Config<E>,
         expected_len: usize,
-        fields: &mut Vec<(&'static str, Option<Save<E::SaveError>>)>,
+        fields: &mut Vec<(&'static str, Option<Save<'static, E::SaveError>>)>,
     ) -> Result<(), Error>
     where
         E: ErrorDiscipline,
@@ -587,13 +587,13 @@ mod imp {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
         pub(super) name: &'static str,
-        pub(super) fields: Vec<(&'static str, Option<Save<E::SaveError>>)>,
+        pub(super) fields: Vec<(&'static str, Option<Save<'static, E::SaveError>>)>,
     }
     impl<E> serde::ser::SerializeStruct for SerializeStruct<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,
@@ -623,14 +623,14 @@ mod imp {
     pub struct SerializeStructVariant<E: ErrorDiscipline> {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
-        pub(super) variant: Variant,
-        pub(super) fields: Vec<(&'static str, Option<Save<E::SaveError>>)>,
+        pub(super) variant: Variant<'static>,
+        pub(super) fields: Vec<(&'static str, Option<Save<'static, E::SaveError>>)>,
     }
     impl<E> serde::ser::SerializeStructVariant for SerializeStructVariant<E>
     where
         E: ErrorDiscipline,
     {
-        type Ok = Save<E::SaveError>;
+        type Ok = Save<'static, E::SaveError>;
         type Error = Error;
         fn serialize_field<T: ?Sized + serde::Serialize>(
             &mut self,

@@ -9,4 +9,5 @@ edition = "2021"
 serde = "1.0.198"
 
 [dev-dependencies]
+serde = { version = "1.0.198", features = ["derive"] }
 valuable = "0.1.0"

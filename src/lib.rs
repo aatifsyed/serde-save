@@ -4,16 +4,15 @@
 //! including [struct names](Save::Struct::name), [field names](Save::Struct::fields),
 //! and [enum variant information](Variant).
 //!
-//! This is useful for interacting with other crates like [`valuable`].
+//! [`Save`] can optionally persist errors _in the serialization tree_ instead of short-circuiting.
 //!
 //!
-//! # Handling Errors
 //!
-//! ## Protocol errors
 
 use core::{convert::Infallible, fmt};
-use std::iter;
+use core::{iter, marker::PhantomData};
 
+use ser::Error;
 use serde::{
     ser::{
         Error as _, SerializeMap as _, SerializeStruct as _, SerializeStructVariant as _,
@@ -26,9 +25,11 @@ pub mod ser;
 
 /// A complete [`serde`] serialization tree.
 ///
+/// Accepts a lifetime to allow users to write dynamic tests.
+///
 /// See [`crate documentation`](mod@self) for more.
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum Save<E = Infallible> {
+pub enum Save<'a, E = Infallible> {
     /// Primitive type, from a call to [`serde::Serializer::serialize_bool`].
     Bool(bool),
     /// Primitive type, from a call to [`serde::Serializer::serialize_i8`].
@@ -71,7 +72,7 @@ pub enum Save<E = Infallible> {
     /// ```
     /// struct MyUnitStruct;
     /// ```
-    UnitStruct(&'static str),
+    UnitStruct(&'a str),
     /// A unit variant of an enum, from a call to [`serde::Serializer::serialize_unit_variant`].
     /// ```
     /// enum MyEnum {
@@ -79,7 +80,7 @@ pub enum Save<E = Infallible> {
     ///     // ...
     /// }
     /// ```
-    UnitVariant(Variant),
+    UnitVariant(Variant<'a>),
 
     /// A tuple struct with a single unnamed field, from a call to [`serde::Serializer::serialize_newtype_struct`].
     /// ```
@@ -87,7 +88,7 @@ pub enum Save<E = Infallible> {
     /// struct MyStruct(A)
     /// ```
     NewTypeStruct {
-        name: &'static str,
+        name: &'a str,
         value: Box<Self>,
     },
     /// A tuple variant of an enum with a single unnamed field, from a call to [`serde::Serializer::serialize_newtype_variant`].
@@ -99,7 +100,7 @@ pub enum Save<E = Infallible> {
     /// }
     /// ```
     NewTypeVariant {
-        variant: Variant,
+        variant: Variant<'a>,
         value: Box<Self>,
     },
 
@@ -141,7 +142,7 @@ pub enum Save<E = Infallible> {
     ///
     /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     TupleStruct {
-        name: &'static str,
+        name: &'a str,
         values: Vec<Self>,
     },
     /// A fixed sequence of unnamed fields in an enum variant, from a call to [`serde::Serializer::serialize_tuple_variant`].
@@ -156,7 +157,7 @@ pub enum Save<E = Infallible> {
     ///
     /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     TupleVariant {
-        variant: Variant,
+        variant: Variant<'a>,
         values: Vec<Self>,
     },
 
@@ -173,8 +174,10 @@ pub enum Save<E = Infallible> {
     ///
     /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     Struct {
-        name: &'static str,
-        /// RHS is [`None`] for [skip](`serde::ser::SerializeStruct::skip_field`)ed fields
+        name: &'a str,
+        /// RHS is [`None`] for [skip](`serde::ser::SerializeStruct::skip_field`)ed fields.
+        ///
+        /// For in-tree errors, the field name is `"!error"`.
         fields: Vec<(&'static str, Option<Self>)>,
     },
     /// A fixed mapping from named fields to values in an enum variant, from a call to [`serde::Serializer::serialize_struct_variant`].
@@ -193,12 +196,20 @@ pub enum Save<E = Infallible> {
     ///
     /// [protocol errors]: ser::Serializer::check_for_protocol_errors
     StructVariant {
-        variant: Variant,
-        /// RHS is [`None`] for [skip](`serde::ser::SerializeStructVariant::skip_field`)ed fields
-        fields: Vec<(&'static str, Option<Self>)>,
+        variant: Variant<'a>,
+        /// RHS is [`None`] for [skip](`serde::ser::SerializeStructVariant::skip_field`)ed fields.
+        ///
+        /// For in-tree errors, the field name is `"!error"`.
+        fields: Vec<(&'a str, Option<Self>)>,
     },
 
     Error(E),
+}
+
+impl<'a> Save<'a, Error> {
+    pub fn error(msg: impl fmt::Display) -> Self {
+        Self::Error(Error::custom(msg))
+    }
 }
 
 /// Save the serialization tree, returning an [`Err`] if:
@@ -206,27 +217,28 @@ pub enum Save<E = Infallible> {
 /// - Any node has any [protocol errors].
 ///
 /// [protocol errors]: ser::Serializer::check_for_protocol_errors
-pub fn save<T: Serialize>(t: T) -> Result<Save, ser::Error> {
+pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, ser::Error> {
     t.serialize(ser::Serializer::new())
 }
 
-pub fn save_errors<T: Serialize>(t: T) -> Save<ser::Error> {
+#[must_use]
+pub fn save_errors<T: Serialize>(t: T) -> Save<'static, ser::Error> {
     t.serialize(ser::Serializer::new().save_errors())
         .unwrap_or_else(Save::Error)
 }
 
 /// Information about a serialized `enum` variant.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Variant {
+pub struct Variant<'a> {
     /// The name of the outer `enum`.
-    pub name: &'static str,
+    pub name: &'a str,
     /// The index of this variant within the outer `enum`.
     pub variant_index: u32,
     /// The name of the inhabited variant within the outer `enum`
-    pub variant: &'static str,
+    pub variant: &'a str,
 }
 
-impl<E> Serialize for Save<E>
+impl<E> Serialize for Save<'static, E>
 where
     E: fmt::Display,
 {
@@ -350,12 +362,12 @@ where
     }
 }
 
-impl<'de> Deserialize<'de> for Save {
+impl<'a, 'de> Deserialize<'de> for Save<'a> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        struct Visitor;
+        struct Visitor<'a>(PhantomData<&'a ()>);
 
         macro_rules! simple {
             ($($fn:ident($ty:ty) -> $variant:ident);* $(;)?) => {
@@ -366,8 +378,8 @@ impl<'de> Deserialize<'de> for Save {
                 )*
             };
         }
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = Save;
+        impl<'a, 'de> serde::de::Visitor<'de> for Visitor<'a> {
+            type Value = Save<'a>;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("a `Save`-able type")
@@ -423,7 +435,7 @@ impl<'de> Deserialize<'de> for Save {
                 D: serde::Deserializer<'de>,
             {
                 Ok(Save::Option(Some(Box::new(
-                    deserializer.deserialize_any(Self)?,
+                    deserializer.deserialize_any(self)?,
                 ))))
             }
 
@@ -475,6 +487,6 @@ impl<'de> Deserialize<'de> for Save {
                 ))
             }
         }
-        deserializer.deserialize_any(Visitor)
+        deserializer.deserialize_any(Visitor(PhantomData))
     }
 }

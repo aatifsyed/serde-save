@@ -69,11 +69,11 @@ impl Valuable for OwnedValue {
     }
 }
 
-impl<E> From<Save<E>> for OwnedValue
+impl<E> From<Save<'static, E>> for OwnedValue
 where
     E: Error + Send + Sync + 'static,
 {
-    fn from(value: Save<E>) -> Self {
+    fn from(value: Save<'static, E>) -> Self {
         match value {
             Save::Bool(it) => Self::Bool(it),
             Save::I8(it) => Self::I8(it),
