@@ -1,3 +1,5 @@
+//! The most complete serialization tree for [`serde`].
+
 use core::fmt;
 use std::convert::Infallible;
 
@@ -60,16 +62,25 @@ pub enum Save<E = Infallible> {
 
     Struct {
         name: &'static str,
-        fields: Vec<(&'static str, Self)>,
-        skipped_fields: Vec<&'static str>,
+        /// RHS is [`None`] for [skip](`serde::ser::SerializeStruct::skip_field`)ed fields
+        fields: Vec<(&'static str, Option<Self>)>,
     },
     StructVariant {
         variant: Variant,
-        fields: Vec<(&'static str, Self)>,
-        skipped_fields: Vec<&'static str>,
+        /// RHS is [`None`] for [skip](`serde::ser::SerializeStructVariant::skip_field`)ed fields
+        fields: Vec<(&'static str, Option<Self>)>,
     },
 
     Error(E),
+}
+
+pub fn save<T: Serialize>(t: T) -> Result<Save, ser::Error> {
+    t.serialize(ser::Serializer::new())
+}
+
+pub fn save_errors<T: Serialize>(t: T) -> Save<ser::Error> {
+    t.serialize(ser::Serializer::new().save_errors())
+        .unwrap_or_else(Save::Error)
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,17 +176,13 @@ where
                 }
                 var.end()
             }
-            Save::Struct {
-                name,
-                fields,
-                skipped_fields,
-            } => {
+            Save::Struct { name, fields } => {
                 let mut strukt = serializer.serialize_struct(name, fields.len())?;
                 for (k, v) in fields {
-                    strukt.serialize_field(k, v)?
-                }
-                for it in skipped_fields {
-                    strukt.skip_field(it)?
+                    match v {
+                        Some(v) => strukt.serialize_field(k, v)?,
+                        None => strukt.skip_field(k)?,
+                    }
                 }
                 strukt.end()
             }
@@ -187,7 +194,6 @@ where
                         variant,
                     },
                 fields,
-                skipped_fields,
             } => {
                 let mut var = serializer.serialize_struct_variant(
                     name,
@@ -196,23 +202,14 @@ where
                     fields.len(),
                 )?;
                 for (k, v) in fields {
-                    var.serialize_field(k, v)?
-                }
-                for it in skipped_fields {
-                    var.skip_field(it)?
+                    match v {
+                        Some(v) => var.serialize_field(k, v)?,
+                        None => var.skip_field(k)?,
+                    }
                 }
                 var.end()
             }
             Save::Error(e) => Err(S::Error::custom(e)),
         }
     }
-}
-
-pub fn save<T: Serialize>(t: T) -> Result<Save, ser::Error> {
-    t.serialize(ser::Serializer::new())
-}
-
-pub fn save_errors<T: Serialize>(t: T) -> Save<ser::Error> {
-    t.serialize(ser::Serializer::new().save_errors())
-        .unwrap_or_else(Save::Error)
 }

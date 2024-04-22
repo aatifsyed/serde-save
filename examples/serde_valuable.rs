@@ -357,11 +357,7 @@ where
                     values: values.into_iter().map(Into::into).collect(),
                 }))
             }
-            Save::Struct {
-                name,
-                fields,
-                skipped_fields,
-            } => {
+            Save::Struct { name, fields } => {
                 struct Helper {
                     name: &'static str,
                     all: Box<[NamedField<'static>]>,
@@ -390,9 +386,12 @@ where
                 }
                 Self::Structable(Box::new(Helper {
                     name,
-                    all: collect_fields(&fields, &skipped_fields),
+                    all: collect_fields(&fields),
                     present: fields.iter().map(|(it, _)| NamedField::new(it)).collect(),
-                    values: fields.into_iter().map(|(_, it)| it.into()).collect(),
+                    values: fields
+                        .into_iter()
+                        .flat_map(|(_, it)| it.map(Into::into))
+                        .collect(),
                 }))
             }
             Save::StructVariant {
@@ -403,7 +402,6 @@ where
                         variant,
                     },
                 fields,
-                skipped_fields,
             } => {
                 struct Helper {
                     name: &'static str,
@@ -445,9 +443,12 @@ where
                 Self::Enumerable(Box::new(Helper {
                     name,
                     variants: [VariantDef::new(variant, Fields::Named(MARKER))],
-                    all: collect_fields(&fields, &skipped_fields),
+                    all: collect_fields(&fields),
                     present: fields.iter().map(|(it, _)| NamedField::new(it)).collect(),
-                    values: fields.into_iter().map(|(_, it)| it.into()).collect(),
+                    values: fields
+                        .into_iter()
+                        .flat_map(|(_, it)| it.map(Into::into))
+                        .collect(),
                 }))
             }
             Save::Error(e) => Self::Error(Box::new(e)),
@@ -456,14 +457,11 @@ where
 }
 
 fn collect_fields<E>(
-    fields: &[(&'static str, Save<E>)],
-    skipped_fields: &[&'static str],
+    fields: &[(&'static str, Option<Save<E>>)],
 ) -> Box<[valuable::NamedField<'static>]> {
     let fields = fields
         .iter()
-        .map(|(it, _)| it)
-        .chain(skipped_fields)
-        .map(|it| valuable::NamedField::new(it))
+        .map(|(it, _)| valuable::NamedField::new(it))
         .collect::<Box<_>>();
     fields
 }

@@ -295,7 +295,6 @@ where
             config: self.config,
             name,
             fields: Vec::with_capacity(len),
-            skipped_fields: Vec::new(),
         })
     }
     fn serialize_struct_variant(
@@ -313,7 +312,6 @@ where
                 variant,
             },
             fields: Vec::with_capacity(len),
-            skipped_fields: Vec::new(),
             expected_len: len,
         })
     }
@@ -544,8 +542,7 @@ mod imp {
         what: &str,
         config: &Config<E>,
         expected_len: usize,
-        fields: &mut Vec<(&'static str, Save<E::SaveError>)>,
-        skipped_fields: &[&'static str],
+        fields: &mut Vec<(&'static str, Option<Save<E::SaveError>>)>,
     ) -> Result<(), Error>
     where
         E: ErrorDiscipline,
@@ -553,7 +550,7 @@ mod imp {
         if config.protocol_errors {
             let mut seen = BTreeSet::new();
             let mut dups = Vec::new();
-            for name in fields.iter().map(|(it, _)| it).chain(skipped_fields) {
+            for name in fields.iter().map(|(it, _)| it) {
                 let new = seen.insert(*name);
                 if !new {
                     dups.push(*name)
@@ -568,7 +565,7 @@ mod imp {
                     ),
                     protocol: true,
                 };
-                fields.push(("!error", E::handle(Err(e))?))
+                fields.push(("!error", Some(E::handle(Err(e))?)))
             }
 
             let actual = fields.len();
@@ -580,7 +577,7 @@ mod imp {
                     ),
                     protocol: true,
                 };
-                fields.push(("!error", E::handle(Err(e))?))
+                fields.push(("!error", Some(E::handle(Err(e))?)))
             }
         }
         Ok(())
@@ -590,8 +587,7 @@ mod imp {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
         pub(super) name: &'static str,
-        pub(super) fields: Vec<(&'static str, Save<E::SaveError>)>,
-        pub(super) skipped_fields: Vec<&'static str>,
+        pub(super) fields: Vec<(&'static str, Option<Save<E::SaveError>>)>,
     }
     impl<E> serde::ser::SerializeStruct for SerializeStruct<E>
     where
@@ -606,28 +602,21 @@ mod imp {
         ) -> Result<(), Self::Error> {
             self.fields.push((
                 key,
-                E::handle(value.serialize(Serializer {
+                Some(E::handle(value.serialize(Serializer {
                     config: self.config,
-                }))?,
+                }))?),
             ));
             Ok(())
         }
         fn end(mut self) -> Result<Self::Ok, Self::Error> {
-            check(
-                "struct",
-                &self.config,
-                self.expected_len,
-                &mut self.fields,
-                &self.skipped_fields,
-            )?;
+            check("struct", &self.config, self.expected_len, &mut self.fields)?;
             Ok(Save::Struct {
                 name: self.name,
                 fields: self.fields,
-                skipped_fields: self.skipped_fields,
             })
         }
         fn skip_field(&mut self, key: &'static str) -> Result<(), Self::Error> {
-            self.skipped_fields.push(key);
+            self.fields.push((key, None));
             Ok(())
         }
     }
@@ -635,8 +624,7 @@ mod imp {
         pub(super) expected_len: usize,
         pub(super) config: Config<E>,
         pub(super) variant: Variant,
-        pub(super) fields: Vec<(&'static str, Save<E::SaveError>)>,
-        pub(super) skipped_fields: Vec<&'static str>,
+        pub(super) fields: Vec<(&'static str, Option<Save<E::SaveError>>)>,
     }
     impl<E> serde::ser::SerializeStructVariant for SerializeStructVariant<E>
     where
@@ -651,29 +639,22 @@ mod imp {
         ) -> Result<(), Self::Error> {
             self.fields.push((
                 key,
-                E::handle(value.serialize(Serializer {
+                Some(E::handle(value.serialize(Serializer {
                     config: self.config,
-                }))?,
+                }))?),
             ));
             Ok(())
         }
         fn end(mut self) -> Result<Self::Ok, Self::Error> {
-            check(
-                "struct",
-                &self.config,
-                self.expected_len,
-                &mut self.fields,
-                &self.skipped_fields,
-            )?;
+            check("struct", &self.config, self.expected_len, &mut self.fields)?;
 
             Ok(Save::StructVariant {
                 variant: self.variant,
                 fields: self.fields,
-                skipped_fields: self.skipped_fields,
             })
         }
         fn skip_field(&mut self, key: &'static str) -> Result<(), Self::Error> {
-            self.skipped_fields.push(key);
+            self.fields.push((key, None));
             Ok(())
         }
     }
