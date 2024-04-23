@@ -45,17 +45,16 @@
 //!         [
 //!             ("system_time",   Save::error("SystemTime must be later than UNIX_EPOCH")),
 //!             ("path_buf",      Save::error("path contains invalid UTF-8 characters")),
-//!             ("normal_string", Save::string("this is a string"),
+//!             ("normal_string", Save::string("this is a string")),
 //!         ]
 //!     )
 //! )
 //! ```
 //!
-//! By default, [`save_errors`] and [`save`] also check for incorrect implementations
-//! of the serde protocol.
+//! [`Serializer`] can also check for incorrect implementations of the serde protocol.
+//!
 //! See the documentation on [`Save`]s variants to see which invariants are checked.
-//! You can [disable this behaviour](Serializer::check_for_protocol_errors) if you
-//! wish.
+//! You can [configure this behaviour](Serializer::check_for_protocol_errors).
 
 mod imp;
 
@@ -159,11 +158,13 @@ pub enum Save<'a, E = Infallible> {
     Seq(Vec<Self>),
     /// A dynamic mapping between values, from a call to [`serde::Serializer::serialize_map`].
     ///
-    /// If [protocol errors] are enabled, checks that:
-    /// - the number of items matches the length (if any) passed to the call to `serialize_map`.
-    /// - there are no orphaned keys or values.
     ///
-    /// Note that duplicate map keys are always allowed.
+    /// If [protocol errors] are enabled, checks that the number of items matches
+    /// the length (if any) passed to the call to `serialize_map`.
+    ///
+    /// Note:
+    /// - Orphaned keys or values are always an error.
+    /// - Duplicate map keys are always allowed.
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
     Map(Vec<(Self, Self)>),
@@ -175,7 +176,8 @@ pub enum Save<'a, E = Infallible> {
     /// (A, B, C);
     /// ```
     ///
-    /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
+    /// If [protocol errors] are enabled, checks that the number of items matches
+    /// the length passed to the call to `serialize_tuple`.
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
     Tuple(Vec<Self>),
@@ -186,7 +188,8 @@ pub enum Save<'a, E = Infallible> {
     /// struct MyTupleStruct(A, B, C);
     /// ```
     ///
-    /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
+    /// If [protocol errors] are enabled, checks that the number of items matches
+    /// the length passed to the call to `serialize_tuple_struct`.
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
     TupleStruct { name: &'a str, values: Vec<Self> },
@@ -198,7 +201,8 @@ pub enum Save<'a, E = Infallible> {
     ///     // ...
     /// }
     /// ```
-    /// If [protocol errors] are enabled, checks that the number of items matches the length passed to the call.
+    /// If [protocol errors] are enabled, checks that the number of items matches
+    /// the length passed to the call to `serialize_tuple_variant`.
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
     TupleVariant {
@@ -214,7 +218,7 @@ pub enum Save<'a, E = Infallible> {
     /// }
     /// ```
     /// If [protocol errors] are enabled, checks that:
-    /// - the number of items matches the length passed to the call.
+    /// - the number of items matches the length passed to the call to `serialize_struct`.
     /// - all fields are unique
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
@@ -236,7 +240,7 @@ pub enum Save<'a, E = Infallible> {
     /// }
     /// ```
     /// If [protocol errors] are enabled, checks that:
-    /// - the number of items matches the length passed to the call.
+    /// - the number of items matches the length passed to the call to `serialize_struct_variant`.
     /// - all fields are unique
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
@@ -317,7 +321,7 @@ impl<'a, E> Save<'a, E> {
 
 /// Save the serialization tree, returning an [`Err`] if:
 /// - Any node's call to [`serde::Serialize::serialize`] fails.
-/// - Any node has any [protocol errors].
+/// - [protocol errors] are ignored.
 ///
 /// [protocol errors]: Serializer::check_for_protocol_errors
 pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, Error> {
@@ -331,8 +335,12 @@ pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, Error> {
 /// [protocol errors]: Serializer::check_for_protocol_errors
 #[must_use]
 pub fn save_errors<T: Serialize>(t: T) -> Save<'static, Error> {
-    t.serialize(Serializer::new().save_errors())
-        .unwrap_or_else(Save::Error)
+    t.serialize(
+        Serializer::new()
+            .check_for_protocol_errors(true)
+            .save_errors(),
+    )
+    .unwrap_or_else(Save::Error)
 }
 
 /// An error returned by an implementation of [`serde::Serialize::serialize`], or

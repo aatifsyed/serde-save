@@ -40,12 +40,12 @@ pub struct Serializer<ErrorDiscipline = ShortCircuit> {
 impl Serializer<ShortCircuit> {
     /// Create a serializer which is:
     /// - [human readable](`serde::Serializer::is_human_readable`) (this is the default for serde formats).
-    /// - sensitive to [protocol errors](Self::check_for_protocol_errors).
+    /// - NOT sensitive to [protocol errors](Self::check_for_protocol_errors).
     pub fn new() -> Self {
         Self {
             config: Config {
                 is_human_readable: true,
-                protocol_errors: true,
+                protocol_errors: false,
                 _error_discipline: PhantomData,
             },
         }
