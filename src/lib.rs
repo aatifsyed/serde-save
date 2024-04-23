@@ -39,24 +39,15 @@
 //!
 //! // But you can persist and inspect them in-tree if you prefer.
 //! assert_eq!(
-//!     save_errors(&my_struct),
-//!     Save::Struct {
-//!         name: "MyStruct",
-//!         fields: vec![
-//!             (
-//!                 "system_time",
-//!                 Some(Save::error("SystemTime must be later than UNIX_EPOCH"))
-//!             ),
-//!             (
-//!                 "path_buf",
-//!                 Some(Save::error("path contains invalid UTF-8 characters"))
-//!             ),
-//!             (
-//!                 "normal_string",
-//!                 Some(Save::String(String::from("this is a string")))
-//!             )
+//!     save_errors(&my_struct), // use this method instead
+//!     Save::strukt(
+//!         "MyStruct",
+//!         [
+//!             ("system_time",   Save::error("SystemTime must be later than UNIX_EPOCH")),
+//!             ("path_buf",      Save::error("path contains invalid UTF-8 characters")),
+//!             ("normal_string", Save::String("this is a string".into())),
 //!         ]
-//!     }
+//!     )
 //! )
 //! ```
 //!
@@ -230,7 +221,7 @@ pub enum Save<'a, E = Infallible> {
         /// RHS is [`None`] for [skip](`serde::ser::SerializeStruct::skip_field`)ed fields.
         ///
         /// For in-tree errors, the field name is `"!error"`.
-        fields: Vec<(&'static str, Option<Self>)>,
+        fields: Vec<(&'a str, Option<Self>)>,
     },
     /// A fixed mapping from named fields to values in an enum variant, from a call to [`serde::Serializer::serialize_struct_variant`].
     /// ```
@@ -292,9 +283,25 @@ pub enum Save<'a, E = Infallible> {
 }
 
 impl<'a> Save<'a, Error> {
-    /// Convenience method.
+    /// Convenience method for creating a custom error.
     pub fn error(msg: impl fmt::Display) -> Self {
         Self::Error(Error::custom(msg))
+    }
+}
+
+impl<'a, E> Save<'a, E> {
+    /// Convenience method for creating a [`Save::Struct`] with no skipped fields.
+    pub fn strukt<V>(name: &'a str, fields: impl IntoIterator<Item = (&'a str, V)>) -> Self
+    where
+        V: Into<Save<'a, E>>,
+    {
+        Self::Struct {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(k, v)| (k, Some(v.into())))
+                .collect(),
+        }
     }
 }
 
