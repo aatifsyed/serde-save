@@ -23,7 +23,7 @@
 //!
 //! // These will fail to serialize
 //! let before_unix_epoch = SystemTime::UNIX_EPOCH - Duration::from_secs(1);
-//! let non_utf8_path = PathBuf::from(OsString::from_vec([u8::MAX].into()));
+//! let non_utf8_path = PathBuf::from(OsString::from_vec(vec![u8::MAX]));
 //!
 //! let my_struct = MyStruct {
 //!     system_time: before_unix_epoch,
@@ -45,7 +45,7 @@
 //!         [
 //!             ("system_time",   Save::error("SystemTime must be later than UNIX_EPOCH")),
 //!             ("path_buf",      Save::error("path contains invalid UTF-8 characters")),
-//!             ("normal_string", Save::String("this is a string".into())),
+//!             ("normal_string", Save::string("this is a string"),
 //!         ]
 //!     )
 //! )
@@ -162,6 +162,8 @@ pub enum Save<'a, E = Infallible> {
     /// If [protocol errors] are enabled, checks that:
     /// - the number of items matches the length (if any) passed to the call to `serialize_map`.
     /// - there are no orphaned keys or values.
+    ///
+    /// Note that duplicate map keys are always allowed.
     ///
     /// [protocol errors]: Serializer::check_for_protocol_errors
     Map(Vec<(Self, Self)>),
@@ -302,6 +304,14 @@ impl<'a, E> Save<'a, E> {
                 .map(|(k, v)| (k, Some(v.into())))
                 .collect(),
         }
+    }
+    /// Convenience method for creating a [`Save::String`]
+    pub fn string(it: impl Into<String>) -> Self {
+        Self::String(it.into())
+    }
+    /// Convenience method for creating a [`Save::ByteArray`]
+    pub fn bytes(it: impl Into<Vec<u8>>) -> Self {
+        Self::ByteArray(it.into())
     }
 }
 
