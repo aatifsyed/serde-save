@@ -309,7 +309,6 @@ impl<'a, E> Save<'a, E> {
 /// - Any node's call to [`serde::Serialize::serialize`] fails.
 /// - Any node has any [protocol errors].
 ///
-///
 /// [protocol errors]: Serializer::check_for_protocol_errors
 pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, Error> {
     t.serialize(Serializer::new())
@@ -445,6 +444,7 @@ where
 
 macro_rules! from_tuple {
     ($($ident:ident),* $(,)?) => {
+        #[doc(hidden)]
         #[allow(non_snake_case)]
         impl<'a, E, $($ident),*> From<($($ident,)*)> for Save<'a, E>
         where
@@ -459,9 +459,24 @@ macro_rules! from_tuple {
     };
 }
 
+/// You can construct a [`Save::Tuple`] using [`From`] for tuples of arities
+/// between 1 and 24, _except_ 2.
+///
+/// The other implementations are hidden from rustdoc for brevity.
+impl<'a, E, T0, T1, T2> From<(T0, T1, T2)> for Save<'a, E>
+where
+    T0: Into<Save<'a, E>>,
+    T1: Into<Save<'a, E>>,
+    T2: Into<Save<'a, E>>,
+{
+    fn from((t0, t1, t2): (T0, T1, T2)) -> Self {
+        Self::Tuple([t0.into(), t1.into(), t2.into()].into())
+    }
+}
+
 from_tuple!(T0);
 // from_tuple!(T0, T1); // conflicting
-from_tuple!(T0, T1, T2);
+// from_tuple!(T0, T1, T2); // document it
 from_tuple!(T0, T1, T2, T3);
 from_tuple!(T0, T1, T2, T3, T4);
 from_tuple!(T0, T1, T2, T3, T4, T5);
