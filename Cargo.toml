@@ -2,8 +2,11 @@
 name = "serde-save"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "the most complete serialization tree for serde"
+license = "MIT OR Apache-2.0"
+homepage = "https://crates.io/serde-save"
+documentation = "https://docs.rs/serde-save"
+repository = "https://github.com/aatifsyed/serde-save"
 
 [dependencies]
 serde = "1.0.198"
