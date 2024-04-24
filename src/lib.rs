@@ -158,7 +158,6 @@ pub enum Save<'a, E = Infallible> {
     Seq(Vec<Self>),
     /// A dynamic mapping between values, from a call to [`serde::Serializer::serialize_map`].
     ///
-    ///
     /// If [protocol errors] are enabled, checks that the number of items matches
     /// the length (if any) passed to the call to `serialize_map`.
     ///
@@ -321,7 +320,9 @@ impl<'a, E> Save<'a, E> {
 
 /// Save the serialization tree, returning an [`Err`] if:
 /// - Any node's call to [`serde::Serialize::serialize`] fails.
-/// - [protocol errors] are ignored.
+/// - Any [`Save::Map`] has an unmatched number of keys and values
+///
+/// [protocol errors] are ignored.
 ///
 /// [protocol errors]: Serializer::check_for_protocol_errors
 pub fn save<T: Serialize>(t: T) -> Result<Save<'static>, Error> {
